@@ -1,6 +1,7 @@
 """
 Module Âm Lịch - Chuyển đổi giữa Âm lịch và Dương lịch
 Sử dụng cho tính toán tử vi theo âm lịch Việt Nam
+Dựa trên thuật toán của Hồ Ngọc Đức
 """
 
 import math
@@ -100,44 +101,56 @@ class AmLich:
     def sun_longitude(jdn: float) -> float:
         """
         Tính kinh độ mặt trời tại thời điểm jdn
-        Kết quả tính bằng độ
+        Kết quả tính bằng radian
 
         Args:
             jdn: Julian Day Number
 
         Returns:
-            Kinh độ mặt trời (0-360 độ)
+            Kinh độ mặt trời (0 đến 2π radian)
         """
         T = (jdn - 2451545.0) / 36525  # Thời gian tính theo thế kỷ Julius từ 1/1/2000
         T2 = T * T
         dr = math.pi / 180
 
-        # Kinh độ trung bình
+        # Kinh độ trung bình (mean anomaly)
         M = 357.52910 + 35999.05030 * T - 0.0001559 * T2 - 0.00000048 * T * T2
+
+        # Kinh độ trung bình (mean longitude)
         L0 = 280.46645 + 36000.76983 * T + 0.0003032 * T2
 
+        # Độ lệch tâm (equation of center)
         DL = (1.914600 - 0.004817 * T - 0.000014 * T2) * math.sin(dr * M)
         DL = DL + (0.019993 - 0.000101 * T) * math.sin(dr * 2 * M) + 0.000290 * math.sin(dr * 3 * M)
 
+        # Kinh độ thực (true longitude) tính bằng độ
         L = L0 + DL
+
+        # Chuyển sang radian
         L = L * dr
+
+        # Chuẩn hóa về khoảng (0, 2π)
         L = L - math.pi * 2 * (int(L / (math.pi * 2)))
 
-        return L / dr
+        return L
 
     @staticmethod
-    def get_sun_longitude_segment(jdn: float) -> int:
+    def get_sun_longitude_segment(jdn: float, time_zone: int = 7) -> int:
         """
         Lấy chỉ số tiết khí (0-11) tương ứng với kinh độ mặt trời
         0: Xuân phân (0°), 1: Thanh minh (15°), ...
 
         Args:
             jdn: Julian Day Number
+            time_zone: Múi giờ (mặc định 7)
 
         Returns:
             Chỉ số tiết khí (0-11 tương ứng 12 tháng)
         """
-        return int(AmLich.sun_longitude(jdn) / 30)
+        # Tính kinh độ mặt trời tại nửa đêm theo múi giờ
+        # sun_longitude trả về radian (0 đến 2π)
+        # Chia cho π rồi nhân 6 để ra 12 tiết khí (0-11)
+        return int(AmLich.sun_longitude(jdn - 0.5 - time_zone / 24.0) / math.pi * 6)
 
     @staticmethod
     def get_new_moon_day(k: int, time_zone: int = 7) -> int:
@@ -169,7 +182,7 @@ class AmLich:
         off = AmLich.jd_from_date(31, 12, yy) - 2415021
         k = int(off / 29.530588853)
         nm = AmLich.get_new_moon_day(k, time_zone)
-        sun_long = AmLich.get_sun_longitude_segment(nm)
+        sun_long = AmLich.get_sun_longitude_segment(nm, time_zone)
 
         if sun_long >= 9:
             nm = AmLich.get_new_moon_day(k - 1, time_zone)
@@ -191,13 +204,13 @@ class AmLich:
         k = int((a11 - 2415021.076998695) / 29.530588853 + 0.5)
         last = 0
         i = 1
-        arc = AmLich.get_sun_longitude_segment(AmLich.get_new_moon_day(k + i, time_zone))
+        arc = AmLich.get_sun_longitude_segment(AmLich.get_new_moon_day(k + i, time_zone), time_zone)
 
         while True:
             last = arc
             i += 1
-            arc = AmLich.get_sun_longitude_segment(AmLich.get_new_moon_day(k + i, time_zone))
-            if arc != last or i >= 14:
+            arc = AmLich.get_sun_longitude_segment(AmLich.get_new_moon_day(k + i, time_zone), time_zone)
+            if not (arc != last and i < 14):
                 break
 
         return i - 1
@@ -216,41 +229,51 @@ class AmLich:
         Returns:
             Tuple (ngày âm, tháng âm, năm âm, có phải tháng nhuận không)
         """
+        # Tính Julian Day Number của ngày dương lịch
         day_number = AmLich.jd_from_date(dd, mm, yy)
+
+        # Tìm sóc (new moon) gần nhất trước hoặc vào ngày này
         k = int((day_number - 2415021.076998695) / 29.530588853)
         month_start = AmLich.get_new_moon_day(k + 1, time_zone)
 
         if month_start > day_number:
             month_start = AmLich.get_new_moon_day(k, time_zone)
 
-        a11, k_temp = AmLich.get_lunar_month_11(yy, time_zone)
-        b11, _ = AmLich.get_lunar_month_11(yy - 1, time_zone)
+        # Lấy tháng 11 âm lịch của năm dương lịch
+        a11, _ = AmLich.get_lunar_month_11(yy, time_zone)
+        b11 = a11
 
-        lunar_day = day_number - month_start + 1
-        diff = int((month_start - b11) / 29)
-        lunar_leap = False
-        lunar_month = diff
-
-        if b11 > a11:
+        # Xác định năm âm lịch
+        if a11 >= month_start:
             lunar_year = yy
-            leap_month_diff = AmLich.get_leap_month_offset(b11, time_zone)
-            if diff >= leap_month_diff:
-                lunar_month = diff
-                if diff == leap_month_diff:
-                    lunar_leap = True
+            a11, _ = AmLich.get_lunar_month_11(yy - 1, time_zone)
         else:
-            lunar_year = yy - 1 if a11 >= month_start else yy
-            leap_month_diff = AmLich.get_leap_month_offset(b11, time_zone)
-            if diff >= leap_month_diff:
-                lunar_month = diff
-                if diff == leap_month_diff:
-                    lunar_leap = True
+            lunar_year = yy + 1
+            b11, _ = AmLich.get_lunar_month_11(yy + 1, time_zone)
 
-        # Điều chỉnh tháng
+        # Tính ngày âm lịch
+        lunar_day = day_number - month_start + 1
+
+        # Tính số tháng từ tháng 11
+        diff = int((month_start - a11) / 29)
+        lunar_leap = False
+        lunar_month = diff + 11
+
+        # Kiểm tra năm nhuận
+        if b11 - a11 > 365:
+            leap_month_diff = AmLich.get_leap_month_offset(a11, time_zone)
+            if diff >= leap_month_diff:
+                lunar_month = diff + 10
+            if diff == leap_month_diff:
+                lunar_leap = True
+
+        # Điều chỉnh tháng về khoảng 1-12
         if lunar_month > 12:
             lunar_month -= 12
-        if lunar_month <= 0:
-            lunar_month += 12
+
+        # Điều chỉnh năm nếu tháng >= 11 và diff < 4
+        if lunar_month >= 11 and diff < 4:
+            lunar_year -= 1
 
         return int(lunar_day), int(lunar_month), int(lunar_year), lunar_leap
 
@@ -269,26 +292,45 @@ class AmLich:
         Returns:
             Tuple (ngày dương, tháng dương, năm dương)
         """
-        a11, k_temp = AmLich.get_lunar_month_11(yy, time_zone)
+        # Xác định cặp tháng 11 (a11, b11) dựa vào tháng âm lịch
+        if mm < 11:
+            # Tháng 1-10: dùng tháng 11 năm trước và năm hiện tại
+            a11, _ = AmLich.get_lunar_month_11(yy - 1, time_zone)
+            b11, _ = AmLich.get_lunar_month_11(yy, time_zone)
+        else:
+            # Tháng 11-12: dùng tháng 11 năm hiện tại và năm sau
+            a11, _ = AmLich.get_lunar_month_11(yy, time_zone)
+            b11, _ = AmLich.get_lunar_month_11(yy + 1, time_zone)
 
+        # Tính k - số thứ tự sóc kể từ 1/1/1900
+        k = int(0.5 + (a11 - 2415021.076998695) / 29.530588853)
+
+        # Tính offset từ tháng 11
         off = mm - 11
         if off < 0:
             off += 12
 
-        if yy >= 2000:
+        # Kiểm tra năm nhuận (có 13 tháng)
+        if b11 - a11 > 365:
+            # Có tháng nhuận - tìm vị trí tháng nhuận
             leap_off = AmLich.get_leap_month_offset(a11, time_zone)
-            if leap_off > 0 and mm > leap_off:
-                off += 1
-        else:
-            b11, _ = AmLich.get_lunar_month_11(yy - 1, time_zone)
-            leap_off = AmLich.get_leap_month_offset(b11, time_zone)
-            if leap_off > 0:
-                if mm >= leap_off:
-                    off += 1
+            leap_month = leap_off - 2
+            if leap_month < 0:
+                leap_month += 12
 
-        k = int((a11 - 2415021.076998695) / 29.530588853 + 0.5)
+            # Kiểm tra tính hợp lệ của tháng nhuận
+            if leap and mm != leap_month:
+                # Yêu cầu tháng nhuận nhưng tháng không phải tháng nhuận
+                raise ValueError(f"Tháng {mm} năm {yy} không phải là tháng nhuận")
+
+            # Điều chỉnh offset nếu cần
+            if leap or off >= leap_off:
+                off += 1
+
+        # Tính JD của ngày đầu tháng
         month_start = AmLich.get_new_moon_day(k + off, time_zone)
 
+        # Tính JD của ngày cần tìm
         jd = month_start + dd - 1
         return AmLich.jd_to_date(jd)
 
@@ -298,13 +340,13 @@ if __name__ == "__main__":
     print("=== Test Module Âm Lịch ===\n")
 
     # Test chuyển dương sang âm
-    dd, mm, yy = 15, 5, 1990
+    dd, mm, yy = 27, 1, 1992
     ngay_am, thang_am, nam_am, nhuan = AmLich.duong_to_am(dd, mm, yy)
     print(f"Dương lịch: {dd:02d}/{mm:02d}/{yy}")
     print(f"Âm lịch: {ngay_am:02d}/{thang_am:02d}/{nam_am}" + (" (nhuận)" if nhuan else ""))
 
     # Test chuyển âm sang dương
-    dd_am, mm_am, yy_am = 21, 4, 1990
+    dd_am, mm_am, yy_am = 23, 12, 1991
     ngay_dl, thang_dl, nam_dl = AmLich.am_to_duong(dd_am, mm_am, yy_am)
     print(f"\nÂm lịch: {dd_am:02d}/{mm_am:02d}/{yy_am}")
     print(f"Dương lịch: {ngay_dl:02d}/{thang_dl:02d}/{nam_dl}")
