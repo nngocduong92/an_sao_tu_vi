@@ -1,0 +1,5 @@
+# Ứng dụng An Sao Tử Vi
+# Không cần dependencies bên ngoài - chỉ sử dụng Python standard library
+
+# Python version: 3.7+
+# Ứng dụng được viết hoàn toàn bằng Python thuần, không sử dụng thư viện bên ngoài
